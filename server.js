@@ -12,7 +12,12 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'NUMEXADMIN2026';
 const DATA_FILE = './data.json';
 
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET','POST','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','x-admin-secret']
+}));
+app.options('*', cors()); // Handle preflight
 app.use(express.json());
 
 // ── DATA STORE (JSON file — no database needed) ─────────────
