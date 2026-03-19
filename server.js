@@ -493,7 +493,7 @@ app.post('/access',(req,res)=>{
   if(!code)return res.json({ok:false,msg:'Code daalo'});
   const d=load();const now=Date.now();const clean=code.trim().toUpperCase();
   const pwd=d.passwords.find(p=>p.code===clean);
-  if(!pwd)return res.json({ok:false,msg:'Galat code — WhatsApp karo: +91-6375394105'});
+  if(!pwd)return res.json({ok:false,msg:'Galat code — Telegram pe contact karo: @KingNUMEX'});
   if(pwd.expiry<now)return res.json({ok:false,msg:'Code expire ho gaya — naya lo'});
   if(!pwd.used){
     pwd.used=true;pwd.activatedAt=now;pwd.userExpiry=now+(pwd.days*86400000);
@@ -501,11 +501,11 @@ app.post('/access',(req,res)=>{
     save(d);
   } else {
     if(pwd.deviceId&&deviceId&&pwd.deviceId!==deviceId){
-      return res.json({ok:false,msg:'Ye code doosre phone pe already use ho chuka hai. Naya code lo — WhatsApp: +91-6375394105'});
+      return res.json({ok:false,msg:'Ye code doosre phone pe already use ho chuka hai. Naya code lo — Telegram: @KingNUMEX'});
     }
     if(!pwd.deviceId&&deviceId){pwd.deviceId=deviceId;save(d);}
   }
-  if(pwd.userExpiry<now)return res.json({ok:false,msg:'Access expire — naya code lo'});
+  if(pwd.userExpiry<now)return res.json({ok:false,msg:'Access expire ho gaya — naya code lo: @KingNUMEX'});
   const dl=Math.ceil((pwd.userExpiry-now)/86400000);
   const pred=d.today;
   return res.json({ok:true,daysLeft:dl,hasPrediction:!!pred,prediction:pred||null});
