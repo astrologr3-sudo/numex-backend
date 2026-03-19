@@ -489,13 +489,23 @@ app.get('/app',(req,res)=>{
 });
 
 app.post('/access',(req,res)=>{
-  const{code}=req.body;if(!code)return res.json({ok:false,msg:'Code daalo'});
+  const{code,deviceId}=req.body;
+  if(!code)return res.json({ok:false,msg:'Code daalo'});
   const d=load();const now=Date.now();const clean=code.trim().toUpperCase();
   const pwd=d.passwords.find(p=>p.code===clean);
-  if(!pwd)return res.json({ok:false,msg:'Galat code'});
-  if(pwd.expiry<now)return res.json({ok:false,msg:'Code expire'});
-  if(!pwd.used){pwd.used=true;pwd.activatedAt=now;pwd.userExpiry=now+(pwd.days*86400000);save(d);}
-  if(pwd.userExpiry<now)return res.json({ok:false,msg:'Access expire — naya lo'});
+  if(!pwd)return res.json({ok:false,msg:'Galat code — WhatsApp karo: +91-6375394105'});
+  if(pwd.expiry<now)return res.json({ok:false,msg:'Code expire ho gaya — naya lo'});
+  if(!pwd.used){
+    pwd.used=true;pwd.activatedAt=now;pwd.userExpiry=now+(pwd.days*86400000);
+    pwd.deviceId=deviceId||null;
+    save(d);
+  } else {
+    if(pwd.deviceId&&deviceId&&pwd.deviceId!==deviceId){
+      return res.json({ok:false,msg:'Ye code doosre phone pe already use ho chuka hai. Naya code lo — WhatsApp: +91-6375394105'});
+    }
+    if(!pwd.deviceId&&deviceId){pwd.deviceId=deviceId;save(d);}
+  }
+  if(pwd.userExpiry<now)return res.json({ok:false,msg:'Access expire — naya code lo'});
   const dl=Math.ceil((pwd.userExpiry-now)/86400000);
   const pred=d.today;
   return res.json({ok:true,daysLeft:dl,hasPrediction:!!pred,prediction:pred||null});
