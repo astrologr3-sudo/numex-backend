@@ -542,7 +542,8 @@ app.post('/admin/predict',(req,res)=>{
   const inp={fb:parseInt(fb),gb:parseInt(gb),gl:parseInt(gl),ds:parseInt(ds)};
   const pred=predict(d.history,inp);
   d.history.push(inp);
-  d.today={date:new Date().toLocaleDateString('en-IN'),inputs:inp,...pred};
+  const extraNums=(req.body.extraNums||[]).filter(n=>!isNaN(n)&&n>=0&&n<=99);
+    d.today={date:new Date().toLocaleDateString('en-IN'),inputs:inp,...pred,extraNums:extraNums};
   save(d);res.json({ok:true,prediction:d.today});
 });
 
