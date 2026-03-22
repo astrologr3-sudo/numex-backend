@@ -537,14 +537,26 @@ app.post('/admin/history',(req,res)=>{
 
 app.post('/admin/predict',(req,res)=>{
   if(!auth(req))return res.status(401).json({ok:false});
-  const{fb,gb,gl,ds}=req.body;
-  const d=load();if(d.history.length<5)return res.json({ok:false,msg:'History add karo'});
-  const inp={fb:parseInt(fb),gb:parseInt(gb),gl:parseInt(gl),ds:parseInt(ds)};
-  const pred=predict(d.history,inp);
-  d.history.push(inp);
-  const extraNums=(req.body.extraNums||[]).filter(n=>!isNaN(n)&&n>=0&&n<=99);
-    d.today={date:new Date().toLocaleDateString('en-IN'),inputs:inp,...pred,extraNums:extraNums};
-  save(d);res.json({ok:true,prediction:d.today});
+  const{fb,gb,gl,ds,manualNums,extraNums}=req.body;
+  const d=load();
+  // manualNums = {fb:{main:[],spot:[]}, gb:{...}, gl:{...}, ds:{...}}
+  // extraNums = 8 numbers for all games
+  const inp={fb:parseInt(fb)||0,gb:parseInt(gb)||0,gl:parseInt(gl)||0,ds:parseInt(ds)||0};
+  const extra=(extraNums||[]).filter(n=>!isNaN(parseInt(n))&&parseInt(n)>=0&&parseInt(n)<=99).map(Number);
+  // Build today's prediction from manual numbers only
+  const locs=['fb','gb','gl','ds'];
+  const pred={};
+  locs.forEach(lk=>{
+    const mn=(manualNums&&manualNums[lk])||{};
+    const main=(mn.main||[]).filter(n=>!isNaN(n)&&n>=0&&n<=99).slice(0,2);
+    const spot=(mn.spot||[]).filter(n=>!isNaN(n)&&n>=0&&n<=99).slice(0,4);
+    pred[lk]={best3:main,spot:spot,fam:[],baki:[],stop:[]};
+  });
+  // Add to history
+  if(!isNaN(inp.fb))d.history.push(inp);
+  d.today={date:new Date().toLocaleDateString('en-IN'),inputs:inp,...pred,extraNums:extra};
+  save(d);
+  res.json({ok:true,prediction:d.today});
 });
 
 app.delete('/admin/today',(req,res)=>{
