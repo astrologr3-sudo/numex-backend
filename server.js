@@ -1,22 +1,3 @@
-/**
- * WIN.X.KING Server v4.2 — ALL BUGS FIXED
- *
- * BUG 1 FIXED: "Galat code" aata tha even for valid codes
- *   → getPwd() errors were silently swallowed → returned null → showed "Galat code"
- *   → Now errors are thrown so real cause is visible in Render logs
- *
- * BUG 2 FIXED: Prediction save failed with Firestore "nested array" error
- *   → /admin/predict now stores data as JSON string (_json field)
- *   → getMeta('today') auto-parses it back when reading
- *
- * BUG 3 FIXED: auth() silent fail if ADMIN_PASS not set
- *   → Now logs error clearly
- *
- * Render env vars needed:
- *   FIREBASE_SERVICE_ACCOUNT = paste full JSON of service account file
- *   ADMIN_PASS = your admin password
- */
-
 const express = require('express');
 const cors    = require('cors');
 const app     = express();
@@ -48,9 +29,6 @@ const META = (n) => db.collection('wxk_meta').doc(n);
 
 // ─── DB HELPERS ───────────────────────────────────────────
 
-// BUG FIX: getPwd now THROWS on Firestore error instead of catching and returning null.
-// Before: any Firestore permission/config error → silently returned null → showed "Galat code"
-// Now: real error is thrown → caught by route handler → shows actual error message + logs it
 async function getPwd(code) {
   const s = await COL().doc(code).get();
   if (!s.exists) return null;
@@ -61,13 +39,11 @@ async function savePwd(code, data) {
   await COL().doc(code).set(data, { merge: true });
 }
 
-// BUG FIX: getMeta('today') now handles _json field (JSON-encoded to avoid Firestore limits)
 async function getMeta(name) {
   try {
     const s = await META(name).get();
     if (!s.exists) return null;
     const d = s.data();
-    // today is stored as JSON string (_json) to avoid "nested array" Firestore error
     if (name === 'today' && d && d._json) {
       try { return JSON.parse(d._json); } catch(e) { return null; }
     }
@@ -105,6 +81,25 @@ function genCode() {
   return s;
 }
 
+// BUG FIX: Code normalize karo — dono formats support karo
+// 'ABCDEFGH' (8 chars, no hyphen) → 'ABCD-EFGH'
+// 'ABCD-EFGH' (9 chars, with hyphen) → 'ABCD-EFGH' (same)
+function normalizeCode(raw) {
+  if (!raw) return '';
+  let code = raw.trim().toUpperCase().replace(/\s/g, '');
+  // Remove any hyphens first, then re-insert at position 4
+  const clean = code.replace(/-/g, '');
+  if (clean.length === 8) {
+    return clean.substring(0, 4) + '-' + clean.substring(4, 8);
+  }
+  // If already in XXXX-XXXX format (length 9)
+  if (code.length === 9 && code[4] === '-') {
+    return code;
+  }
+  // Fallback: return as-is (will fail getPwd with not found)
+  return code;
+}
+
 function buildPrediction(today, planLabel) {
   if (!today) return null;
   const pk = PLAN_KEY[planLabel] || 'plan999';
@@ -132,7 +127,7 @@ function getIP(req) {
 // ─── HEALTH ───────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({
-    ok: true, status: 'WIN.X.KING v4.2',
+    ok: true, status: 'WIN.X.KING v4.3',
     firebase: db ? 'CONNECTED' : 'NOT CONFIGURED — Set FIREBASE_SERVICE_ACCOUNT in Render',
     adminPass: process.env.ADMIN_PASS ? 'SET' : 'NOT SET — Set ADMIN_PASS in Render',
   });
@@ -146,10 +141,13 @@ app.post('/access', async (req, res) => {
 
   const { code, deviceId } = req.body;
   if (!code) return res.json({ ok:false, msg:'Code daalo' });
-  const clean = code.trim().toUpperCase();
+
+  // BUG FIX: Normalize code — ABCDEFGH aur ABCD-EFGH dono work karenge
+  const clean = normalizeCode(code);
+  console.log('[/access] Raw:', code, '→ Normalized:', clean);
 
   try {
-    const pwd = await getPwd(clean); // throws on Firestore error, null if not found
+    const pwd = await getPwd(clean);
 
     if (!pwd) return res.json({ ok:false, msg:'Galat code — Telegram pe contact karo' });
 
@@ -182,7 +180,6 @@ app.post('/access', async (req, res) => {
     return res.json({ ok:true, daysLeft, plan, hasPrediction:!!prediction, prediction, ad:(ad&&ad.enabled)?ad:null });
 
   } catch(e) {
-    // Real Firestore/config error — logged clearly, not hidden as "Galat code"
     console.error('[/access] REAL ERROR for code:', clean, '→', e.message);
     return res.status(500).json({ ok:false, msg:'Server error: ' + e.message });
   }
@@ -193,7 +190,10 @@ app.post('/verify', async (req, res) => {
   if (!db) return res.json({ ok:false });
   const { code, deviceId } = req.body;
   if (!code) return res.json({ ok:false });
-  const clean = code.trim().toUpperCase();
+
+  // BUG FIX: Normalize code here too
+  const clean = normalizeCode(code);
+
   try {
     const pwd = await getPwd(clean);
     if (!pwd || !pwd.used)           return res.json({ ok:false, msg:'Session expire — dobara login karo' });
@@ -263,7 +263,7 @@ app.post('/admin/pwd', async (req, res) => {
 // ADMIN: delete code
 app.delete('/admin/pwd/:code', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok:false });
-  try { await COL().doc(req.params.code.toUpperCase()).delete(); res.json({ ok:true }); }
+  try { await COL().doc(normalizeCode(req.params.code)).delete(); res.json({ ok:true }); }
   catch(e) { res.status(500).json({ ok:false, msg:e.message }); }
 });
 
@@ -271,7 +271,7 @@ app.delete('/admin/pwd/:code', async (req, res) => {
 app.post('/admin/logout/:code', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok:false });
   try {
-    const code = req.params.code.toUpperCase();
+    const code = normalizeCode(req.params.code);
     const pwd  = await getPwd(code);
     if (!pwd) return res.json({ ok:false, msg:'Code nahi mila' });
     await savePwd(code, { sessionActive:false, deviceId:null });
@@ -280,7 +280,6 @@ app.post('/admin/logout/:code', async (req, res) => {
 });
 
 // ─── ADMIN: save prediction ───────────────────────────────
-// BUG FIX: stored as JSON string (_json) to avoid Firestore "nested array" error
 app.post('/admin/predict', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok:false });
   if (!db)        return res.status(503).json({ ok:false, msg:'Firebase not configured' });
@@ -295,7 +294,6 @@ app.post('/admin/predict', async (req, res) => {
       extraSingle: (extraSingle||[]).slice(0,4),
       savedAt:     Date.now(),
     };
-    // Store as JSON string — avoids Firestore "nested array in array" error
     await setMeta('today', { _json: JSON.stringify(pred), savedAt: pred.savedAt });
     console.log('[/admin/predict] Saved for date:', pred.date);
     res.json({ ok:true, prediction:pred });
@@ -338,7 +336,6 @@ app.delete('/admin/ad', async (req, res) => {
 });
 
 // ─── ADMIN: debug ─────────────────────────────────────────
-// Test Firestore: https://your-server.onrender.com/admin/debug?p=YOUR_PASS
 app.get('/admin/debug', async (req, res) => {
   if (!auth(req) && req.query.p !== process.env.ADMIN_PASS)
     return res.status(401).json({ ok:false });
@@ -356,5 +353,5 @@ app.get('/admin/debug', async (req, res) => {
 app.use((req, res) => res.status(404).json({ ok:false, msg:'Not found' }));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`WIN.X.KING v4.2 | Port:${PORT} | Firebase:${db?'OK':'NOT SET'} | Admin:${process.env.ADMIN_PASS?'SET':'NOT SET'}`);
+  console.log(`WIN.X.KING v4.3 | Port:${PORT} | Firebase:${db?'OK':'NOT SET'} | Admin:${process.env.ADMIN_PASS?'SET':'NOT SET'}`);
 });
