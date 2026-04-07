@@ -128,7 +128,9 @@ app.post('/access', async (req, res) => {
 
   const { code, deviceId } = req.body;
   if (!code) return res.json({ ok: false, msg: 'Code daalo' });
-  const clean = code.trim().toUpperCase();
+  // Normalize: remove all non-alphanum, uppercase, insert dash at position 4
+  const raw = code.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 8);
+  const clean = raw.length === 8 ? raw.slice(0,4) + '-' + raw.slice(4) : code.trim().toUpperCase();
 
   try {
     const pwd = await getPwd(clean);
@@ -190,7 +192,8 @@ app.post('/verify', async (req, res) => {
 
   const { code, deviceId } = req.body;
   if (!code) return res.json({ ok: false });
-  const clean = code.trim().toUpperCase();
+  const raw2 = code.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 8);
+  const clean = raw2.length === 8 ? raw2.slice(0,4) + '-' + raw2.slice(4) : code.trim().toUpperCase();
 
   try {
     const pwd = await getPwd(clean);
