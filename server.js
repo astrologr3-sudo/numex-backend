@@ -1,7 +1,11 @@
 /**
- * WIN.X.KING — Server v4.0
- * Firebase Firestore storage — data never wipes
- * Plans: 299 / 599 / 999 / 1499
+ * WIN.X.KING — Server v4.1 (FIXED)
+ * Firebase Firestore — permanent storage
+ * Plans: 299/599/999/1499
+ *
+ * FIREBASE SETUP:
+ * Render env var: FIREBASE_SERVICE_ACCOUNT = (paste entire JSON content of service account file)
+ * Render env var: ADMIN_PASS = your admin password
  */
 
 const express = require('express');
@@ -13,7 +17,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '5mb' }));
 
 // ══════════════════════════════════════════════════════════════
-// FIREBASE INIT — reads FIREBASE_SERVICE_ACCOUNT env var
+// FIREBASE INIT
 // ══════════════════════════════════════════════════════════════
 let db = null;
 
@@ -21,43 +25,61 @@ function initFirebase() {
   try {
     const admin = require('firebase-admin');
     if (admin.apps.length > 0) { db = admin.firestore(); return true; }
-
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '';
-    if (!raw) { console.error('❌ FIREBASE_SERVICE_ACCOUNT not set'); return false; }
-
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT || '';
+    if (!raw) { console.error('❌ FIREBASE_SERVICE_ACCOUNT env var not set'); return false; }
     const sa = JSON.parse(raw);
     admin.initializeApp({ credential: admin.credential.cert(sa) });
     db = admin.firestore();
-    console.log('✅ Firebase connected:', sa.project_id);
+    console.log('✅ Firebase OK:', sa.project_id);
     return true;
   } catch(e) {
-    console.error('❌ Firebase init failed:', e.message);
+    console.error('❌ Firebase init error:', e.message);
     return false;
   }
 }
-
 const FB_OK = initFirebase();
 
 // ══════════════════════════════════════════════════════════════
 // DB HELPERS
 // ══════════════════════════════════════════════════════════════
-const COL = {
-  pwd:   () => db.collection('wxk_passwords'),
-  meta:  (doc) => db.collection('wxk_meta').doc(doc),
-};
+function COL_pwd()       { return db.collection('wxk_passwords'); }
+function DOC_meta(name)  { return db.collection('wxk_meta').doc(name); }
 
 async function getPwd(code) {
   if (!db) return null;
-  try { const s = await COL.pwd().doc(code).get(); return s.exists ? { ...s.data(), code: s.id } : null; } catch(e) { return null; }
+  try {
+    const s = await COL_pwd().doc(code).get();
+    return s.exists ? { ...s.data(), code: s.id } : null;
+  } catch(e) { return null; }
 }
-async function savePwd(code, data) { await COL.pwd().doc(code).set(data, { merge: true }); }
-async function getMeta(doc) {
-  try { const s = await COL.meta(doc).get(); return s.exists ? s.data() : null; } catch(e) { return null; }
+async function savePwd(code, data) {
+  await COL_pwd().doc(code).set(data, { merge: true });
 }
-async function setMeta(doc, data) { await COL.meta(doc).set(data); }
+async function getMeta(name) {
+  try {
+    const s = await DOC_meta(name).get();
+    return s.exists ? s.data() : null;
+  } catch(e) { return null; }
+}
+async function setMeta(name, data) {
+  await DOC_meta(name).set(data);
+}
 
 // ══════════════════════════════════════════════════════════════
-// HELPERS
+// PLANS
+// ══════════════════════════════════════════════════════════════
+const PLANS = {
+  '299':  { price: 299,  days: 7,  locations: 2, label: 'SILVER'  },
+  '599':  { price: 599,  days: 15, locations: 3, label: 'GOLD'    },
+  '999':  { price: 999,  days: 30, locations: 4, label: 'DIAMOND' },
+  '1499': { price: 1499, days: 60, locations: 4, label: 'ROYAL'   },
+};
+
+// Prediction key per plan label (must match user-app.html)
+const PLAN_KEY = { SILVER: 'plan299', GOLD: 'plan599', DIAMOND: 'plan999', ROYAL: 'plan1499' };
+
+// ══════════════════════════════════════════════════════════════
+// RATE LIMITING
 // ══════════════════════════════════════════════════════════════
 const rl = {};
 function rateLimit(ip, key, max, ms) {
@@ -65,10 +87,21 @@ function rateLimit(ip, key, max, ms) {
   if (!rl[k] || now - rl[k].s > ms) { rl[k] = { c: 1, s: now }; return false; }
   return ++rl[k].c > max;
 }
-setInterval(() => { const n = Date.now(); Object.keys(rl).forEach(k => { if (n - rl[k].s > 600000) delete rl[k]; }); }, 600000);
+setInterval(() => {
+  const n = Date.now();
+  Object.keys(rl).forEach(k => { if (n - rl[k].s > 600000) delete rl[k]; });
+}, 600000);
 
-function getIP(req) { return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown'; }
-function auth(req) { const p = process.env.ADMIN_PASS; return !!(p && req.headers['x-pass'] === p); }
+function getIP(req) {
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+    || req.socket?.remoteAddress || 'unknown';
+}
+
+function auth(req) {
+  const p = process.env.ADMIN_PASS;
+  if (!p) return false; // ADMIN_PASS must be set in Render
+  return req.headers['x-pass'] === p;
+}
 
 function genCode() {
   const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -78,31 +111,20 @@ function genCode() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// PLANS
-// Plan 299  → 7 days,  2 locations, 2 single + 8 spot = 20 total per plan
-// Plan 599  → 15 days, 3 locations, 2 single + 8 spot = 30 total per plan
-// Plan 999  → 30 days, 4 locations, 2 single + 8 spot = 40 total per plan
-// Plan 1499 → 60 days, 4 locations, 2 single + 8 spot + 4 extra single = 44 total
+// HEALTH CHECK
 // ══════════════════════════════════════════════════════════════
-const PLANS = {
-  '299':  { price: 299,  days: 7,  locations: 2, label: 'SILVER',  extraSingle: 0 },
-  '599':  { price: 599,  days: 15, locations: 3, label: 'GOLD',    extraSingle: 0 },
-  '999':  { price: 999,  days: 30, locations: 4, label: 'DIAMOND', extraSingle: 0 },
-  '1499': { price: 1499, days: 60, locations: 4, label: 'ROYAL',   extraSingle: 4 },
-};
+app.get('/', (req, res) => {
+  res.json({ ok: true, status: 'WIN.X.KING v4.1', firebase: FB_OK ? 'OK' : 'NOT SET' });
+});
 
 // ══════════════════════════════════════════════════════════════
-// PUBLIC: / health check
-// ══════════════════════════════════════════════════════════════
-app.get('/', (req, res) => res.json({ ok: true, status: 'WIN.X.KING v4', firebase: FB_OK ? 'connected' : 'not configured' }));
-
-// ══════════════════════════════════════════════════════════════
-// PUBLIC: /access — login with code
+// PUBLIC: /access — user enters code
 // ══════════════════════════════════════════════════════════════
 app.post('/access', async (req, res) => {
-  if (!FB_OK) return res.status(503).json({ ok: false, msg: 'Server configuration error' });
+  if (!FB_OK) return res.status(503).json({ ok: false, msg: 'Server config error' });
   const ip = getIP(req);
-  if (rateLimit(ip, 'access', 10, 60000)) return res.json({ ok: false, msg: 'Bahut zyada attempts. 1 min ruko.' });
+  if (rateLimit(ip, 'access', 10, 60000))
+    return res.json({ ok: false, msg: 'Bahut zyada attempts. 1 min ruko.' });
 
   const { code, deviceId } = req.body;
   if (!code) return res.json({ ok: false, msg: 'Code daalo' });
@@ -111,16 +133,28 @@ app.post('/access', async (req, res) => {
   try {
     const pwd = await getPwd(clean);
     if (!pwd) return res.json({ ok: false, msg: 'Galat code — Telegram pe contact karo' });
+
     const now = Date.now();
+    const plan = PLANS[String(pwd.price)] || PLANS['999'];
 
     if (!pwd.used) {
-      if (pwd.expiry < now) return res.json({ ok: false, msg: 'Code expire ho gaya — naya lo' });
+      // First activation
+      if (pwd.expiry < now)
+        return res.json({ ok: false, msg: 'Code expire ho gaya — naya lo' });
+
       const userExpiry = now + (pwd.days * 86400000);
-      await savePwd(clean, { used: true, activatedAt: now, userExpiry, deviceId: deviceId || null, sessionActive: true, lastSeen: now });
-      const today = await getMeta('today');
-      const ad    = await getMeta('ad');
-      const plan  = PLANS[String(pwd.price)] || PLANS['999'];
-      return res.json({ ok: true, daysLeft: pwd.days, plan, hasPrediction: !!today, prediction: today || null, ad: (ad && ad.enabled) ? ad : null });
+      await savePwd(clean, {
+        used: true, activatedAt: now, userExpiry,
+        deviceId: deviceId || null, sessionActive: true, lastSeen: now,
+      });
+
+      const [today, ad] = await Promise.all([getMeta('today'), getMeta('ad')]);
+      const prediction = buildPrediction(today, plan.label);
+      return res.json({
+        ok: true, daysLeft: pwd.days, plan,
+        hasPrediction: !!prediction, prediction,
+        ad: (ad && ad.enabled) ? ad : null,
+      });
     }
 
     // Re-login
@@ -134,22 +168,26 @@ app.post('/access', async (req, res) => {
     await savePwd(clean, upd);
 
     const daysLeft = Math.ceil((pwd.userExpiry - now) / 86400000);
-    const plan  = PLANS[String(pwd.price)] || PLANS['999'];
-    const today = await getMeta('today');
-    const ad    = await getMeta('ad');
-    return res.json({ ok: true, daysLeft, plan, hasPrediction: !!today, prediction: today || null, ad: (ad && ad.enabled) ? ad : null });
+    const [today, ad] = await Promise.all([getMeta('today'), getMeta('ad')]);
+    const prediction = buildPrediction(today, plan.label);
+    return res.json({
+      ok: true, daysLeft, plan,
+      hasPrediction: !!prediction, prediction,
+      ad: (ad && ad.enabled) ? ad : null,
+    });
   } catch(e) {
-    console.error('/access:', e.message);
+    console.error('/access error:', e.message);
     return res.status(500).json({ ok: false, msg: 'Server error. Dobara try karo.' });
   }
 });
 
 // ══════════════════════════════════════════════════════════════
-// PUBLIC: /verify — silent session check
+// PUBLIC: /verify — silent session refresh
 // ══════════════════════════════════════════════════════════════
 app.post('/verify', async (req, res) => {
   if (!FB_OK) return res.json({ ok: false });
   if (rateLimit(getIP(req), 'verify', 20, 60000)) return res.json({ ok: false });
+
   const { code, deviceId } = req.body;
   if (!code) return res.json({ ok: false });
   const clean = code.trim().toUpperCase();
@@ -164,92 +202,137 @@ app.post('/verify', async (req, res) => {
 
     await savePwd(clean, { lastSeen: now });
     const daysLeft = Math.ceil((pwd.userExpiry - now) / 86400000);
-    const plan  = PLANS[String(pwd.price)] || PLANS['999'];
-    const today = await getMeta('today');
-    const ad    = await getMeta('ad');
-    return res.json({ ok: true, daysLeft, plan, hasPrediction: !!today, prediction: today || null, ad: (ad && ad.enabled) ? ad : null });
+    const plan = PLANS[String(pwd.price)] || PLANS['999'];
+    const [today, ad] = await Promise.all([getMeta('today'), getMeta('ad')]);
+    const prediction = buildPrediction(today, plan.label);
+    return res.json({
+      ok: true, daysLeft, plan,
+      hasPrediction: !!prediction, prediction,
+      ad: (ad && ad.enabled) ? ad : null,
+    });
   } catch(e) {
     return res.status(500).json({ ok: false });
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// HELPER: build prediction object for user
+// today = full prediction doc from Firebase
+// planLabel = 'SILVER' | 'GOLD' | 'DIAMOND' | 'ROYAL'
+// Returns: { date, locations:[], extraSingle:[] } or null
+// ══════════════════════════════════════════════════════════════
+function buildPrediction(today, planLabel) {
+  if (!today) return null;
+  const pk = PLAN_KEY[planLabel] || 'plan999';
+  const planData = today[pk];
+  if (!planData || !planData.locations || !planData.locations.length) return null;
+  return {
+    date:        today.date,
+    locations:   planData.locations,
+    extraSingle: planLabel === 'ROYAL' ? (today.extraSingle || []) : [],
+  };
+}
+
+// Public ad
 app.get('/ad', async (req, res) => {
   const ad = await getMeta('ad');
   res.json({ ok: true, ad: (ad && ad.enabled) ? ad : null });
 });
 
 // ══════════════════════════════════════════════════════════════
-// ADMIN ROUTES
+// ADMIN: /admin/data
 // ══════════════════════════════════════════════════════════════
 app.get('/admin/data', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false, msg: 'Password galat hai' });
   if (!FB_OK) return res.status(503).json({ ok: false, msg: 'Firebase not configured' });
   try {
     const [snap, today, ad, stats] = await Promise.all([
-      COL.pwd().get(), getMeta('today'), getMeta('ad'), getMeta('stats')
+      COL_pwd().get(), getMeta('today'), getMeta('ad'), getMeta('stats')
     ]);
     const passwords = snap.docs.map(d => ({ ...d.data(), code: d.id }));
     const now = Date.now();
     return res.json({
       ok: true, passwords,
-      today: today || null, ad: ad || null,
-      sold: stats?.sold || passwords.filter(p => p.used).length,
+      today: today || null,
+      ad: ad || null,
+      sold:    stats?.sold    || passwords.filter(p => p.used).length,
       revenue: stats?.revenue || 0,
-      active: passwords.filter(p => p.used && p.userExpiry > now).length,
+      active:  passwords.filter(p => p.used && p.userExpiry > now).length,
     });
   } catch(e) {
-    console.error('/admin/data:', e.message);
+    console.error('/admin/data error:', e.message);
     return res.status(500).json({ ok: false, msg: 'Firebase error: ' + e.message });
   }
 });
 
-// Set today's prediction — plan-wise locations
+// ══════════════════════════════════════════════════════════════
+// ADMIN: /admin/predict — save plan-wise predictions
+// Admin sends: { plan299, plan599, plan999, plan1499, extraSingle }
+// Each plan: { locations: [ { name, single:[], spots:[[],[]] } ] }
+// ══════════════════════════════════════════════════════════════
 app.post('/admin/predict', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false });
-  const { locations, extraSingle } = req.body;
-  // locations = array of { name, single:[n,n], spot:[n,n,n,n,n,n,n,n] }
-  // extraSingle = [n,n,n,n] for Royal plan only
+  const { plan299, plan599, plan999, plan1499, extraSingle } = req.body;
   try {
     const pred = {
-      date: new Date().toLocaleDateString('en-IN'),
-      locations: locations || [],
-      extraSingle: extraSingle || [],
-      savedAt: Date.now(),
+      date:       new Date().toLocaleDateString('en-IN'),
+      plan299:    plan299  || null,
+      plan599:    plan599  || null,
+      plan999:    plan999  || null,
+      plan1499:   plan1499 || null,
+      extraSingle: (extraSingle || []).slice(0, 4),
+      savedAt:    Date.now(),
     };
     await setMeta('today', pred);
     res.json({ ok: true, prediction: pred });
-  } catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
+  } catch(e) {
+    res.status(500).json({ ok: false, msg: e.message });
+  }
 });
 
+// ADMIN: clear prediction
 app.delete('/admin/today', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false });
-  try { await COL.meta('today').delete(); res.json({ ok: true }); } catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
+  try { await DOC_meta('today').delete(); res.json({ ok: true }); }
+  catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
 });
 
-// Generate access code
+// ══════════════════════════════════════════════════════════════
+// ADMIN: /admin/pwd — generate access code
+// Admin sends: { name, price } — price = 299|599|999|1499
+// ══════════════════════════════════════════════════════════════
 app.post('/admin/pwd', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false });
   const { name = 'User', price = 999 } = req.body;
   const plan = PLANS[String(price)] || PLANS['999'];
   try {
     const code = genCode(), now = Date.now();
-    await COL.pwd().doc(code).set({
-      code, name, price: plan.price, days: plan.days,
-      createdAt: now, expiry: now + (30 * 86400000),
+    await COL_pwd().doc(code).set({
+      code, name,
+      price: plan.price, days: plan.days, label: plan.label,
+      createdAt: now,
+      expiry: now + (30 * 86400000), // 30-day window to activate
       used: false, userExpiry: null, deviceId: null,
       sessionActive: false, activatedAt: null, lastSeen: null,
     });
     const stats = await getMeta('stats') || { sold: 0, revenue: 0 };
     await setMeta('stats', { sold: (stats.sold || 0) + 1, revenue: (stats.revenue || 0) + plan.price });
     res.json({ ok: true, code, price: plan.price, days: plan.days, label: plan.label, name });
+  } catch(e) {
+    res.status(500).json({ ok: false, msg: e.message });
+  }
+});
+
+// ADMIN: delete code
+app.delete('/admin/pwd/:code', async (req, res) => {
+  if (!auth(req)) return res.status(401).json({ ok: false });
+  try {
+    await COL_pwd().doc(req.params.code.toUpperCase()).delete();
+    res.json({ ok: true });
   } catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
 });
 
-app.delete('/admin/pwd/:code', async (req, res) => {
-  if (!auth(req)) return res.status(401).json({ ok: false });
-  try { await COL.pwd().doc(req.params.code.toUpperCase()).delete(); res.json({ ok: true }); } catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
-});
-
+// ADMIN: force logout user
 app.post('/admin/logout/:code', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false });
   try {
@@ -260,27 +343,34 @@ app.post('/admin/logout/:code', async (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
 });
 
+// ADMIN: get ad
 app.get('/admin/ad', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false });
-  const ad = await getMeta('ad'); res.json({ ok: true, ad: ad || null });
+  const ad = await getMeta('ad');
+  res.json({ ok: true, ad: ad || null });
 });
 
+// ADMIN: save ad
 app.post('/admin/ad', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false });
   const { enabled, text, link, label } = req.body;
   try {
     const ad = { enabled: !!enabled, text: text || '', link: link || '', label: label || 'Contact Karo', updatedAt: Date.now() };
-    await setMeta('ad', ad); res.json({ ok: true, ad });
+    await setMeta('ad', ad);
+    res.json({ ok: true, ad });
   } catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
 });
 
+// ADMIN: delete ad
 app.delete('/admin/ad', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok: false });
-  try { await COL.meta('ad').delete(); res.json({ ok: true }); } catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
+  try { await DOC_meta('ad').delete(); res.json({ ok: true }); }
+  catch(e) { res.status(500).json({ ok: false, msg: e.message }); }
 });
 
+// 404
 app.use((req, res) => res.status(404).json({ ok: false, msg: 'Not found' }));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`WIN.X.KING v4 | Port:${PORT} | Firebase:${FB_OK ? 'OK' : 'NOT SET'} | AdminPass:${process.env.ADMIN_PASS ? 'SET' : 'NOT SET'}`);
+  console.log(`WIN.X.KING v4.1 | Port:${PORT} | Firebase:${FB_OK ? 'OK' : 'NOT CONFIGURED'} | Admin:${process.env.ADMIN_PASS ? 'SET' : 'NOT SET — SET ADMIN_PASS IN RENDER!'}`);
 });
