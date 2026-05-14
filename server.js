@@ -1,5 +1,5 @@
 /**
- * WIN.X.KING Server v4.4
+ * KVR Company Server v4.4
  *
  * BUGS FIXED:
  * 1. "Galat code" even for valid codes → proper error logging added, normalize code
@@ -94,7 +94,7 @@ const PLANS = {
   '299':  { price: 299,  days: 7,  locations: 2, label: 'SILVER'  },
   '599':  { price: 599,  days: 15, locations: 3, label: 'GOLD'    },
   '999':  { price: 999,  days: 30, locations: 4, label: 'DIAMOND' },
-  '1499': { price: 1499, days: 60, locations: 4, label: 'ROYAL'   },
+  '1499': { price: 1499, days: 30, locations: 4, label: 'ROYAL'   },
 };
 const PLAN_KEY = { SILVER:'plan299', GOLD:'plan599', DIAMOND:'plan999', ROYAL:'plan1499' };
 
@@ -139,10 +139,12 @@ function buildPrediction(today, planLabel) {
   const pk = PLAN_KEY[planLabel] || 'plan999';
   const pd = today[pk];
   if (!pd || !pd.locations || !pd.locations.length) return null;
+  // Structure: each location has single[] (2 nums) + spot[] (3 nums)
+  // ROYAL single stays 4 nums (as per owner instruction)
   return {
-    date:        today.date,
-    locations:   pd.locations,
-    extraSingle: planLabel === 'ROYAL' ? (today.extraSingle || []) : [],
+    date:      today.date,
+    locations: pd.locations,
+    isRoyal:   planLabel === 'ROYAL',
   };
 }
 
@@ -165,7 +167,7 @@ function getIP(req) {
 app.get('/', (req, res) => {
   res.json({
     ok: true,
-    status: 'WIN.X.KING v4.4',
+    status: 'KVR Company v4.4',
     firebase: db ? 'CONNECTED' : ('FAILED — ' + (firebaseError || 'unknown error')),
     adminPass: process.env.ADMIN_PASS ? 'SET' : 'NOT SET',
   });
@@ -387,16 +389,17 @@ app.post('/admin/logout/:code', async (req, res) => {
 app.post('/admin/predict', async (req, res) => {
   if (!auth(req)) return res.status(401).json({ ok:false });
   if (!db)        return res.status(503).json({ ok:false, msg:'Firebase not connected' });
-  const { plan299, plan599, plan999, plan1499, extraSingle } = req.body;
+  const { plan299, plan599, plan999, plan1499 } = req.body;
   try {
+    // Each plan has locations[]. Each location: { name, single:[2 nums], spot:[3 nums] }
+    // ROYAL: single has 4 nums (per owner spec)
     const pred = {
-      date:        new Date().toLocaleDateString('en-IN'),
-      plan299:     plan299  || null,
-      plan599:     plan599  || null,
-      plan999:     plan999  || null,
-      plan1499:    plan1499 || null,
-      extraSingle: (extraSingle || []).slice(0, 4),
-      savedAt:     Date.now(),
+      date:     new Date().toLocaleDateString('en-IN'),
+      plan299:  plan299  || null,
+      plan599:  plan599  || null,
+      plan999:  plan999  || null,
+      plan1499: plan1499 || null,
+      savedAt:  Date.now(),
     };
     await setMeta('today', { _json: JSON.stringify(pred), savedAt: pred.savedAt });
     console.log('[/admin/predict] Saved for date:', pred.date);
@@ -448,7 +451,7 @@ app.get('/admin/debug', async (req, res) => {
 
   const info = {
     ok: false,
-    serverVersion: 'v4.4',
+    serverVersion: 'KVR v4.4',
     firebase: db ? 'CONNECTED' : ('FAILED — ' + (firebaseError||'unknown')),
     adminPass: process.env.ADMIN_PASS ? 'SET' : 'NOT SET',
     firebaseError: firebaseError || null,
@@ -488,5 +491,5 @@ app.get('/admin/debug', async (req, res) => {
 app.use((req, res) => res.status(404).json({ ok:false, msg:'Not found' }));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`WIN.X.KING v4.4 | Port:${PORT} | Firebase:${db?'OK':'FAILED'} | Admin:${process.env.ADMIN_PASS?'SET':'NOT SET'}`);
+  console.log(`KVR Company v4.4 | Port:${PORT} | Firebase:${db?'OK':'FAILED'} | Admin:${process.env.ADMIN_PASS?'SET':'NOT SET'}`);
 });
